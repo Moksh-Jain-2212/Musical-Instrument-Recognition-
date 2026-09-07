@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sound Atlas — Hear the layers</title>
+  <meta name="description" content="Explore instruments, vocals, and sounds throughout your audio with a synchronized timeline.">
+  <link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/" aria-label="Sound Atlas home"><span class="brand-mark">ıııı</span> Sound Atlas</a><span class="header-note">A closer listen.</span><span class="badge" id="connection">Checking setup…</span></header>
+  <main>
+    <section class="intro"><p class="eyebrow">AUDIO CONTENT EXPLORER</p><h1>Hear the layers.<br><span>See the moments.</span></h1><p>Uncover the instruments, voices, and sounds in your audio.<br>One file. A timeline of everything the model hears.</p></section>
+    <div class="workspace">
+      <aside class="card input-card">
+        <div class="section-heading"><span class="step">01</span><h2>Your audio</h2></div>
+        <label id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose or drop an audio file">
+          <span class="upload-icon" aria-hidden="true">↥</span><strong>Drop your audio here</strong><span>or <u>browse files</u></span><small>MP3, WAV, M4A, WebM · <span id="max-size">100</span> MB max</small>
+          <input id="file" type="file" accept="audio/*,.m4a,.webm,.mp3,.wav" hidden>
+        </label>
+        <div id="file-info" class="file-info" hidden><span class="file-symbol">♫</span><div><strong id="file-name"></strong><small id="file-meta"></small></div><button id="clear" class="icon-button" aria-label="Remove selected audio">×</button></div>
+        <div class="setting"><label for="threshold">Detection confidence</label><output id="threshold-value" for="threshold">30%</output></div>
+        <input id="threshold" type="range" min="1" max="100" value="30" step="1"><div class="range-labels"><span>More sensitive</span><span>More selective</span></div>
+        <button id="analyze" class="primary" disabled>Analyze audio <span>↗</span></button>
+        <div id="progress-area" hidden><progress id="progress" max="100"></progress><p id="progress-text" role="status"></p><button id="cancel" class="text-button">Cancel analysis</button></div>
+        <p id="error" class="error" role="alert" hidden></p>
+        <p id="setup" class="setup" hidden>Add your Hugging Face token to <code>.env</code> and restart the server. Setup instructions are in <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">Hugging Face settings ↗</a> and the project README.</p>
+        <div class="privacy"><span>↗</span><p>Audio chunks are sent to a community Hugging Face Space. Local copies are deleted after analysis; the host may cache uploads.</p></div>
+      </aside>
+      <section class="card output-card">
+        <div class="section-heading"><span class="step">02</span><h2>The listening room</h2><span class="small-label" id="resolution">5 SECOND RESOLUTION</span></div>
+        <div class="player-shell"><div class="player-top"><span class="eyebrow">AUDIO PLAYER</span><span id="clock">00:00 / 00:00</span></div><audio id="audio" controls preload="metadata" aria-label="Uploaded audio playback"></audio><p id="player-hint">Choose a file to listen and explore.</p></div>
+        <div class="now-playing"><div><span class="live-dot"></span><span class="eyebrow">AT THIS MOMENT</span></div><div id="active-sounds" aria-live="polite"><span class="muted">Your detected sounds will appear here.</span></div></div>
+        <div id="empty" class="empty"><div class="empty-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><h3>Every sound has a place.</h3><p>Upload a recording and analyze it to map<br>its sounds across time.</p><span class="pill">Instruments</span><span class="pill">Vocals</span><span class="pill">Speech</span></div>
+        <div id="results" hidden><div class="timeline-heading"><h3>Sound timeline</h3><span id="result-summary"></span></div><p class="timeline-help">Select a colored segment to jump to that moment.</p><div class="timeline-scroll"><div id="timeline" class="timeline"><div id="axis" class="axis"></div><div id="tracks"></div><div id="playhead" class="playhead"></div></div></div><div id="warnings" class="warnings"></div></div>
+      </section>
+    </div>
+    <section id="details" class="card details" hidden><div class="section-heading"><span class="step">03</span><h2>Moment by moment</h2><button id="download" class="secondary">Download JSON ↓</button></div><div class="table-scroll"><table><thead><tr><th>From</th><th>To</th><th>Detected sounds</th><th>Confidence</th></tr></thead><tbody id="table-body"></tbody></table></div></section>
+    <footer><span>SOUND ATLAS <span class="footer-dot">·</span> Powered by hosted YAMNet</span><p>Model estimates, not certainty. Mixed instruments can be missed or confused.<br>The hosted service returns its top 5 labels per chunk.</p></footer>
+  </main>
+</body>
+</html>
