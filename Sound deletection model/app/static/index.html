@@ -1,53 +1,61 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Musical Instrument Detector — Instrument Timeline</title>
-  <meta name="description" content="Discover which musical instruments are playing at each timestamp in your uploaded music.">
-  <link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d0f0d">
+  <title>Sound Atlas — Hear the whole picture</title>
+  <meta name="description" content="Discover the instruments inside your music. An interactive listening studio with timestamped instrument detection.">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header><a class="brand" href="/" aria-label="Instrument Timeline home"><span class="brand-mark">ıııı</span> Instrument Timeline</a><span class="header-note">A closer listen.</span><span class="badge" id="connection">Checking setup…</span></header>
+  <a class="skip-link" href="#workspace">Skip to the studio</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Sound Atlas home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>sound atlas<span class="brand-period">.</span></a>
+    <span class="header-note">An instrument listening studio</span>
+    <span class="badge" id="connection" role="status">Checking setup…</span>
+  </header>
   <main>
-    <section class="intro"><p class="eyebrow">INSTRUMENT TIMELINE</p><h1>Musical Instrument<br><span>Detector</span></h1><p>Upload music to see which instruments are playing over time.</p></section>
-    <div class="workspace">
-      <aside class="card input-card">
-        <div class="section-heading"><span class="step">01</span><h2>Your audio</h2></div>
+    <section class="intro" aria-labelledby="hero-title">
+      <div><p class="eyebrow"><span class="live-dot" aria-hidden="true"></span> LISTEN BENEATH THE SURFACE</p><h1 id="hero-title">Hear the <em>whole picture.</em></h1><p class="intro-copy">Every recording has layers. Discover the instruments within yours,<br class="desktop-break"> and follow them from the first note to the last.</p></div>
+      <div class="hero-art" aria-hidden="true"><div class="orbit"></div><div class="hero-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span>THE ART OF LISTENING</span></div>
+    </section>
+    <div id="workspace" class="workspace" tabindex="-1">
+      <aside class="card input-card" aria-labelledby="upload-heading">
+        <div class="section-heading"><span class="step">01</span><h2 id="upload-heading">Bring your audio</h2><span class="section-caption">INPUT</span></div>
         <label id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose or drop an audio file">
-          <span class="upload-icon" aria-hidden="true">↥</span><strong>Drop your audio here</strong><span>or <u>browse files</u></span><small>MP3, WAV, M4A, WebM · <span id="max-size">100</span> MB max</small>
+          <span class="upload-icon" aria-hidden="true">↥</span><strong>Drop a track here</strong><span>or <u>choose a file</u></span><small>MP3 · WAV · M4A · WebM<br>Up to <span id="max-size">100</span> MB</small>
           <input id="file" type="file" accept="audio/*,.m4a,.webm,.mp3,.wav" hidden>
         </label>
-        <div id="file-info" class="file-info" hidden><span class="file-symbol">♫</span><div><strong id="file-name"></strong><small id="file-meta"></small></div><button id="clear" class="icon-button" aria-label="Remove selected audio">×</button></div>
-        <div class="setting"><label for="threshold">Detection confidence</label><output id="threshold-value" for="threshold">20%</output></div>
-        <input id="threshold" type="range" min="5" max="80" value="20" step="1"><div class="range-labels"><span>More sensitive · 5%</span><span>More selective · 80%</span></div>
-        <label id="fallback-setting" class="fallback-setting" hidden><input id="fallback" type="checkbox"> Try 15% if no instrument passes the selected threshold. Uses the same predictions; no extra requests.</label>
-        <button id="analyze" class="primary" disabled>Analyze Instruments <span>↗</span></button>
-        <div id="progress-area" hidden><progress id="progress" max="100"></progress><p id="progress-text" role="status"></p><button id="cancel" class="text-button">Cancel analysis</button></div>
+        <div id="file-info" class="file-info" hidden><span class="file-symbol" aria-hidden="true">♫</span><div><strong id="file-name"></strong><small id="file-meta"></small></div><button id="clear" class="icon-button" aria-label="Remove selected audio">×</button></div>
+        <div class="setting"><label for="threshold">Detection threshold</label><output id="threshold-value" for="threshold">20%</output></div>
+        <input id="threshold" type="range" min="5" max="80" value="20" step="1"><div class="range-labels"><span>More sensitive</span><span>More selective</span></div>
+        <label id="fallback-setting" class="fallback-setting" hidden><input id="fallback" type="checkbox"><span>Listen a little closer<small>Try a lower threshold when no instrument is found. No extra requests.</small></span></label>
+        <button id="analyze" class="primary" disabled>Analyze instruments <span aria-hidden="true">↗</span></button>
+        <div id="progress-area" class="progress-area" hidden>
+          <div class="loading-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <progress id="progress" class="sr-only" max="100" aria-label="Audio analysis progress"></progress>
+          <p id="progress-text" role="status" aria-live="polite" aria-atomic="true"></p><button id="cancel" class="text-button">Cancel analysis</button>
+        </div>
         <p id="error" class="error" role="alert" hidden></p>
-        <p id="setup" class="setup" hidden>Add your Hugging Face token to <code>.env</code> and restart the server. Setup instructions are in <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">Hugging Face settings ↗</a> and the project README.</p>
-        <div class="privacy"><span>↗</span><p id="privacy-copy">Audio chunks are sent to a community Hugging Face Space. Local copies are deleted after analysis; the host may cache uploads.</p></div>
+        <p id="setup" class="setup" hidden>Add your Hugging Face token to the server environment to start listening. See the project README for setup.</p>
+        <div class="privacy"><span aria-hidden="true">↗</span><p id="privacy-copy">Audio chunks are sent to a community Hugging Face Space. Local copies are deleted after analysis; the host may cache uploads.</p></div>
       </aside>
-      <section class="card output-card">
-        <div class="section-heading"><span class="step">02</span><h2>The listening room</h2><span class="small-label" id="resolution">5 SECOND RESOLUTION</span></div>
-        <div class="player-shell"><div class="player-top"><span class="eyebrow">AUDIO PLAYER</span><span id="clock">00:00 / 00:00</span></div><audio id="audio" controls preload="metadata" aria-label="Uploaded audio playback"></audio><p id="player-hint">Choose a file to listen and explore.</p></div>
-        <div class="now-playing"><div><span class="live-dot"></span><span class="eyebrow">CURRENTLY PLAYING</span></div><div id="active-instruments" aria-live="polite"><span class="muted">Your detected instruments will appear here.</span></div></div>
-        <div id="empty" class="empty"><div class="empty-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><h3>Every instrument has a place.</h3><p>Upload a recording and analyze it to map<br>its instruments across time.</p><span class="pill">Instruments</span><span class="pill">Strings</span><span class="pill">Percussion</span></div>
-        <div id="results" hidden><div class="timeline-heading"><h3>Instrument Timeline</h3><span id="result-summary"></span></div><p class="timeline-help">Select a colored segment to jump to that moment.</p><div class="timeline-scroll"><div id="timeline" class="timeline"><div id="axis" class="axis"></div><div id="tracks"></div><div id="playhead" class="playhead"></div></div></div><div id="warnings" class="warnings"></div></div>
+      <section class="card output-card" aria-labelledby="studio-heading">
+        <div class="section-heading"><span class="step">02</span><h2 id="studio-heading">The listening room</h2><span class="small-label" id="resolution">5 SECOND RESOLUTION</span></div>
+        <div class="player-shell"><div class="player-top"><span class="eyebrow">YOUR RECORDING</span><span id="clock">00:00 / 00:00</span></div><audio id="audio" controls preload="metadata" aria-label="Uploaded audio playback"></audio><p id="player-hint">Choose a file to listen and explore.</p></div>
+        <div class="now-playing"><div class="now-heading"><span class="live-dot" aria-hidden="true"></span><span class="eyebrow">CURRENTLY PLAYING</span></div><div id="active-sounds" aria-live="polite" aria-atomic="true"><div id="active-instruments"><span class="muted">The instruments will reveal themselves here.</span></div></div></div>
+        <div id="empty" class="empty"><div class="empty-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><span class="eyebrow empty-kicker">A LITTLE CURIOSITY. A CLOSER LISTEN.</span><h3>There’s more in every track.</h3><p>Bring a recording. We’ll map its instruments<br>onto a timeline you can hear and explore.</p><div class="empty-tags"><span class="pill">Strings</span><span class="pill">Keys</span><span class="pill">Percussion</span></div></div>
+        <div id="results" hidden><div class="timeline-heading"><h3>Inside the track</h3><span id="result-summary"></span></div><p class="timeline-help">Select a segment to hear that moment.</p><div class="timeline-scroll" tabindex="0" role="region" aria-label="Instrument timeline, scroll horizontally to explore"><div id="timeline" class="timeline"><div id="axis" class="axis"></div><div id="tracks"></div><div id="playhead" class="playhead" aria-hidden="true"></div></div></div><div id="warnings" class="warnings"></div></div>
       </section>
     </div>
-    <section id="instrument-summary" class="card details" hidden><div class="section-heading"><span class="step">03</span><h2>Instruments Found</h2></div><div id="summary-grid" class="summary-grid"></div></section>
-    <section id="details" class="card details" hidden><div class="section-heading"><span class="step">04</span><h2>Moment by moment</h2><button id="download" class="secondary">Download JSON ↓</button></div><div class="table-scroll"><table><thead><tr><th>From</th><th>To</th><th>Instruments detected</th><th>Confidence</th></tr></thead><tbody id="table-body"></tbody></table></div></section>
-    <footer><span>INSTRUMENT TIMELINE <span class="footer-dot">·</span> <span id="provider-label">Powered by hosted YAMNet</span></span><p>Model scores are not guaranteed probabilities of correctness.<br><span id="provider-limitation">YAMNet exposes only its top 5 predictions per chunk; instruments can be missed.</span></p></footer>
-    <details id="raw-details" class="card supported-instruments" hidden>
-      <summary>Raw YAMNet predictions by chunk</summary>
-      <p>The host returns only its top five labels, including non-instruments. Missing instruments cannot be recovered by filtering. These diagnostic labels are excluded from the instrument timeline.</p>
-      <div id="raw-windows"></div>
-    </details>
-    <details id="supported-instruments" class="card supported-instruments" hidden>
-      <summary>Supported instruments <span id="supported-count"></span></summary>
-      <p id="supported-note"></p>
-      <ul id="supported-list"></ul>
-    </details>
+    <section id="details" class="card details" aria-labelledby="log-heading" hidden><div class="section-heading"><span class="step">03</span><div><p class="eyebrow log-eyebrow">THE SESSION NOTES</p><h2 id="log-heading">What you’re hearing</h2></div><button id="download" class="secondary">Download JSON <span aria-hidden="true">↓</span></button></div><div class="log-labels" aria-hidden="true"><span>INSTRUMENT</span><span>HEARD AT</span></div><ol id="table-body" class="instrument-log" aria-label="Instrument occurrences in chronological order"></ol></section>
+    <details id="supported-instruments" class="supported-instruments" hidden><summary>Explore supported instruments <span id="supported-count"></span></summary><p id="supported-note"></p><ul id="supported-list"></ul></details>
+    <!-- Retained DOM anchors for existing state-reset hooks; scores live in JSON only. -->
+    <div id="instrument-summary" hidden><div id="summary-grid"></div></div>
+    <div id="raw-details" hidden><div id="raw-windows"></div></div>
+    <footer><div><a class="brand footer-brand" href="/">sound atlas.</a><span class="footer-caption">Made for a closer listen.</span></div><p><span id="provider-label">Powered by hosted YAMNet</span><br><span id="provider-limitation">Instruments and timestamps are estimates; some instruments may be missed.</span></p></footer>
   </main>
 </body>
 </html>

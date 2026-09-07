@@ -1,7 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const audio = $("audio");
-const colors = ["#92aa70", "#d3ad71", "#84aaa7", "#b9a3c4", "#cf9a88", "#98abd0", "#a9b677"];
+const colors = ["#c4f06a", "#70d6c3", "#b5a0ee", "#edb878", "#8cb9ee", "#e7a2ba", "#c6ce91"];
 let selectedFile = null, objectURL = null, result = null, controller = null, busy = false;
 let config = null, frame = null, lastActiveKey = "", rowElements = [], tableRows = [];
 
@@ -113,40 +113,25 @@ $("analyze").addEventListener("click", async () => {
 });
 
 function noDetectionMessage(entry) {
-  return entry?.message || "No specific musical instrument was confidently detected in this interval.";
+  return (entry?.message ? displayMessage(entry.message) : null) || "No specific musical instrument was confidently detected in this interval.";
 }
 function emptyResultMessage() {
   if (result.failed_chunks === result.windows.length) return "Analysis failed. See the errors below.";
   return [...new Set(result.windows.filter((w) => w.status === "ok" && !w.instruments.length).map(noDetectionMessage))].join(" ");
 }
-function renderRawPredictions() {
-  $("raw-details").hidden = result.provider !== "yamnet";
-  $("raw-windows").replaceChildren();
-  if (result.provider !== "yamnet") return;
-  for (const entry of result.windows) {
-    const section = element("section", undefined, "raw-window");
-    section.append(element("h3", `${time(entry.start, true)} → ${time(entry.end, true)}`));
-    if (entry.status === "failed") {
-      section.append(element("p", entry.error || "Analysis failed; raw predictions are unavailable."));
-    } else {
-      section.append(element("p", `Filtering at ${Math.round(entry.effective_threshold * 100)}%${entry.fallback_used ? " · fallback applied using the same predictions" : ""}`));
-      if (entry.message) section.append(element("p", entry.message));
-      const list = element("ul");
-      for (const prediction of entry.raw_predictions) {
-        list.append(element("li", `${prediction.label} — ${(prediction.score * 100).toFixed(2)}%`));
-      }
-      section.append(list);
-    }
-    $("raw-windows").append(section);
-  }
+function occurrenceTime(seconds) {
+  return time(seconds, seconds % 1 !== 0).replace(/^0(?=\d:)/, "");
+}
+function displayMessage(message) {
+  return message.replace(/\b\d+(?:\.\d+)?% fallback/g, "fallback").replace(/\b\d+(?:\.\d+)?%/g, "selected");
 }
 
 function renderResults() {
   $("empty").hidden = true; $("results").hidden = false; $("details").hidden = false;
   $("resolution").textContent = result.chunk_duration ? `${result.chunk_duration} SECOND RESOLUTION` : "ESTIMATED TIMESTAMPS";
   $("result-summary").textContent = `${Object.keys(result.instrument_tracks).length} instruments · ${time(result.duration, true)}`;
-  $("player-hint").textContent = `Analyzed at ${Math.round(result.threshold * 100)}% confidence. Play or seek to explore.`;
-  if (result.windows.some((w) => w.fallback_used)) $("player-hint").textContent += " 15% fallback was applied to some intervals.";
+  $("player-hint").textContent = "Your track, mapped. Play or select a moment to explore.";
+  if (result.windows.some((w) => w.fallback_used)) $("player-hint").textContent += " A lower detection threshold was used for some intervals.";
   const axis = $("axis"); axis.replaceChildren();
   for (let i = 0; i <= 5; i++) {
     const label = element("span", time(result.duration * i / 5, result.duration < 5));
@@ -159,8 +144,9 @@ function renderResults() {
     const lane = element("div", undefined, "track-lane");
     for (const segment of segments) {
       const bar = element("button", undefined, "segment");
-      const description = `${name}, ${time(segment.start, true)} to ${time(segment.end, true)}, ${Math.round(segment.average_confidence * 100)}% confidence`;
+      const description = `${name} · ${occurrenceTime(segment.start)}–${occurrenceTime(segment.end)}`;
       bar.title = description; bar.setAttribute("aria-label", description);
+      bar.setAttribute("data-tooltip", `${occurrenceTime(segment.start)}–${occurrenceTime(segment.end)}`);
       bar.style.left = `${segment.start / result.duration * 100}%`;
       bar.style.width = `${(segment.end - segment.start) / result.duration * 100}%`;
       bar.addEventListener("click", () => { audio.currentTime = segment.start; updatePlayback(); });
@@ -169,41 +155,30 @@ function renderResults() {
     row.append(label, lane); $("tracks").append(row); rowElements.push({ name, row });
   });
   if (!rowElements.length) $("tracks").append(element("p", emptyResultMessage(), "muted"));
-  renderInstrumentSummary();
-  renderRawPredictions();
-  $("warnings").replaceChildren(...result.warnings.map((message) => element("p", message)));
+  $("instrument-summary").hidden = true;
+  $("raw-details").hidden = true;
+  $("warnings").replaceChildren(...result.warnings.map((message) => element("p", displayMessage(message))));
   const failures = [...new Set(result.windows.filter((w) => w.error).map((w) => w.error))];
-  for (const message of failures) $("warnings").append(element("p", message));
+  for (const message of failures) $("warnings").append(element("p", displayMessage(message)));
   $("table-body").replaceChildren(); tableRows = [];
-  for (const entry of result.timeline) {
-    const row = element("tr"), start = element("td"), button = element("button", time(entry.start, true), "seek-button");
-    button.addEventListener("click", () => { audio.currentTime = entry.start; updatePlayback(); }); start.append(button);
-    row.append(start, element("td", time(entry.end, true)), element("td", entry.status === "failed" ? "Analysis failed" : entry.instruments.map((instrument) => instrument.name).join(" + ") || noDetectionMessage(entry)),
-      element("td", (entry.instruments.map((instrument) => `${instrument.name} ${Math.round(instrument.confidence * 100)}%`).join(" · ") || "—") + (entry.fallback_used ? " · 15% fallback" : "")));
-    $("table-body").append(row); tableRows.push({ entry, row });
+  const names = Object.keys(result.instrument_tracks).sort((a, b) => a.localeCompare(b));
+  const occurrences = names.flatMap((name, index) => result.instrument_tracks[name].map((segment) => ({
+    ...segment, name, color: colors[index % colors.length],
+  }))).sort((a, b) => a.start - b.start || a.end - b.end || a.name.localeCompare(b.name));
+  for (const entry of occurrences) {
+    const row = element("li", undefined, "occurrence");
+    row.style.setProperty("--track-color", entry.color);
+    const button = element("button", undefined, "occurrence-button");
+    const name = element("span", undefined, "occurrence-name");
+    name.append(element("span", undefined, "dot"), document.createTextNode(entry.name));
+    const range = `${occurrenceTime(entry.start)}–${occurrenceTime(entry.end)}`;
+    button.setAttribute("aria-label", `${entry.name}, ${range}. Seek to this moment.`);
+    button.append(name, element("span", range, "occurrence-time"), element("span", "↗", "occurrence-arrow"));
+    button.addEventListener("click", () => { audio.currentTime = entry.start; updatePlayback(); });
+    row.append(button); $("table-body").append(row); tableRows.push({ entry, row });
   }
+  if (!occurrences.length) $("table-body").append(element("li", emptyResultMessage(), "log-empty"));
   lastActiveKey = ""; updatePlayback();
-}
-
-function renderInstrumentSummary() {
-  $("instrument-summary").hidden = false;
-  $("summary-grid").replaceChildren();
-  for (const [name, segments] of Object.entries(result.instrument_tracks).sort(([a], [b]) => a.localeCompare(b))) {
-    const card = element("article", undefined, "instrument-summary-card");
-    card.append(element("h3", name));
-    const duration = segments.reduce((total, segment) => total + segment.end - segment.start, 0);
-    const score = segments.reduce((total, segment) => total + segment.average_confidence * (segment.end - segment.start), 0) / duration;
-    card.append(element("p", `Average confidence: ${Math.round(score * 100)}%`));
-    for (const segment of segments) {
-      const button = element("button", `${time(segment.start, true)} → ${time(segment.end, true)} · ${Math.round(segment.average_confidence * 100)}%`, "summary-seek");
-      button.setAttribute("aria-label", `Seek to ${name} at ${time(segment.start, true)}`);
-      button.addEventListener("click", () => { audio.currentTime = segment.start; updatePlayback(); });
-      card.append(button);
-    }
-    $("summary-grid").append(card);
-  }
-  if (!Object.keys(result.instrument_tracks).length) $("summary-grid").append(element("p",
-    emptyResultMessage(), "muted"));
 }
 
 function updatePlayback() {
@@ -219,9 +194,9 @@ function updatePlayback() {
   if (key !== lastActiveKey) {
     lastActiveKey = key;
     const events = window?.instruments || [];
-    $("active-instruments").replaceChildren(...events.map((e) => element("span", `${e.name} · ${Math.round(e.confidence * 100)}%`, "instrument-chip")));
+    $("active-instruments").replaceChildren(...events.map((e) => element("span", e.name, "instrument-chip")));
     if (!events.length) $("active-instruments").append(element("span", !window ? "End of audio." : window.status === "failed" ? "This interval could not be analyzed." : noDetectionMessage(window), "muted"));
-    if (window?.fallback_used) $("active-instruments").append(element("span", "15% fallback", "muted"));
+    if (window?.fallback_used) $("active-instruments").append(element("span", "Closer listening applied", "muted"));
     for (const { name, row } of rowElements) row.classList.toggle("active", events.some((e) => e.name === name));
     for (const { entry, row } of tableRows) row.classList.toggle("current", current >= entry.start && current < entry.end);
   }
