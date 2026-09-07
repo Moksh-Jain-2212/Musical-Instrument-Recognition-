@@ -62,6 +62,7 @@ def create_app(settings: Settings | None = None, classifier=None, instrument_cla
                 "required_credential": config.credential_name,
                 "chunk_duration": config.chunk_duration if config.instrument_provider == "yamnet" else None,
                 "confidence_threshold": config.confidence_threshold,
+                "instrument_fallback_enabled": config.instrument_fallback_enabled if config.instrument_provider == "yamnet" else False,
                 "max_upload_mb": config.max_upload_mb, "max_duration_seconds": config.max_duration_seconds,
                 "supported_instruments": list(GEMINI_INSTRUMENTS if config.instrument_provider == "gemini" else SUPPORTED_INSTRUMENTS)}
 
@@ -75,9 +76,9 @@ def create_app(settings: Settings | None = None, classifier=None, instrument_cla
         # No await between the busy check and lock acquisition.
         await app.state.busy.acquire()
 
-    async def events(file: UploadFile, threshold: float):
+    async def events(file: UploadFile, threshold: float, fallback: bool):
         try:
-            async with aclosing(analyze_upload(file, config, app.state.classifier, threshold)) as analysis:
+            async with aclosing(analyze_upload(file, config, app.state.classifier, threshold, fallback=fallback)) as analysis:
                 async for event in analysis:
                     yield event
         finally:
@@ -87,10 +88,11 @@ def create_app(settings: Settings | None = None, classifier=None, instrument_cla
                 app.state.busy.release()
 
     @app.post("/api/analyze", response_model=AnalysisResult)
-    async def analyze(file: UploadFile = File(...), threshold: float | None = Query(None, ge=0.01, le=1)):
+    async def analyze(file: UploadFile = File(...), threshold: float | None = Query(None, ge=0.05, le=0.80), fallback: bool | None = Query(None)):
         await prepare(file)
         try:
-            async for event in events(file, threshold if threshold is not None else config.confidence_threshold):
+            async for event in events(file, threshold if threshold is not None else config.confidence_threshold,
+                    fallback if fallback is not None else config.instrument_fallback_enabled):
                 if event["type"] == "result":
                     result = event["result"]
             return result
@@ -100,12 +102,13 @@ def create_app(settings: Settings | None = None, classifier=None, instrument_cla
             raise HTTPException(400, str(exc)) from exc
 
     @app.post("/api/analyze/stream")
-    async def analyze_stream(file: UploadFile = File(...), threshold: float | None = Query(None, ge=0.01, le=1)):
+    async def analyze_stream(file: UploadFile = File(...), threshold: float | None = Query(None, ge=0.05, le=0.80), fallback: bool | None = Query(None)):
         await prepare(file)
 
         async def stream():
             try:
-                async with aclosing(events(file, threshold if threshold is not None else config.confidence_threshold)) as analysis:
+                async with aclosing(events(file, threshold if threshold is not None else config.confidence_threshold,
+                    fallback if fallback is not None else config.instrument_fallback_enabled)) as analysis:
                     async for event in analysis:
                         yield json.dumps(event) + "\n"
             except AudioError as exc:

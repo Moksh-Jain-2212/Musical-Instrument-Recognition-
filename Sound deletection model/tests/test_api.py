@@ -54,6 +54,8 @@ def test_analyze_partial_failure_and_cleanup(settings, monkeypatch):
         data = response.json()
         assert data["duration"] == 11 and data["failed_chunks"] == 1
         assert data["windows"][1]["status"] == "failed"
+        assert data["windows"][1]["raw_predictions"] == []
+        assert not data["windows"][1]["fallback_used"]
         assert len(data["instrument_tracks"]["Piano"]) == 2
         assert [item["name"] for item in data["timeline"][0]["instruments"]] == ["Drums", "Piano"]
     assert classifier.calls == 3
@@ -96,8 +98,9 @@ def test_fatal_auth_does_not_send_remaining_chunks(settings):
 
 def test_threshold_override(settings):
     with TestClient(create_app(settings, Classifier())) as client:
-        result = client.post("/api/analyze?threshold=0.85", files={"file": ("a.wav", wav_bytes())}).json()
-        assert [item["name"] for item in result["timeline"][0]["instruments"]] == ["Piano"]
+        result = client.post("/api/analyze?threshold=0.80", files={"file": ("a.wav", wav_bytes())}).json()
+        assert result["threshold"] == .8
+        assert [item["name"] for item in result["timeline"][0]["instruments"]] == ["Drums", "Piano"]
 
 
 def test_stream_error_releases_resources(settings):
@@ -153,7 +156,8 @@ def test_gemini_common_result_and_stream(settings):
     settings.hf_token = type(settings.hf_token)("")
     paths = []
     class SemanticProvider:
-        async def analyze(self, path, duration, threshold):
+        async def analyze(self, path, duration, threshold, *, fallback=False):
+            assert fallback is False
             paths.append(path)
             assert path.exists()
             yield AnalysisProgress("analyzing_instruments")

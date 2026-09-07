@@ -176,7 +176,7 @@ class GeminiInstrumentClassifier:
         except ValueError as exc:
             raise ProviderError("Gemini returned invalid JSON.") from exc
 
-    async def analyze(self, audio: Path, duration: float, threshold: float):
+    async def analyze(self, audio: Path, duration: float, threshold: float, *, fallback: bool = False):
         resource_name = None
         result = None
         cleanup_warning = None

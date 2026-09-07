@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     instrument_provider: Literal["yamnet", "gemini"] = "yamnet"
     gemini_model: str = Field("gemini-2.5-flash", pattern=r"^gemini-[a-zA-Z0-9.\-]+$")
     chunk_duration: float = Field(5, ge=3, le=10)
-    confidence_threshold: float = Field(0.30, ge=0.01, le=1)
+    confidence_threshold: float = Field(0.20, ge=0.05, le=0.80)
+    instrument_fallback_enabled: bool = False
     api_timeout_seconds: float = Field(45, ge=1, le=180)
     api_retries: int = Field(2, ge=0, le=3)
     max_upload_mb: int = Field(100, ge=1, le=500)

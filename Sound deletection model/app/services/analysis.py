@@ -16,7 +16,7 @@ class UploadTooLarge(AudioError):
     pass
 
 
-async def analyze_upload(file: UploadFile, settings: Settings, classifier: InstrumentClassifier, threshold: float):
+async def analyze_upload(file: UploadFile, settings: Settings, classifier: InstrumentClassifier, threshold: float, *, fallback: bool = False):
     """Yield real progress followed by the result. All local files are temporary."""
     try:
         with tempfile.TemporaryDirectory(prefix="instrument-timeline-") as folder:
@@ -36,7 +36,8 @@ async def analyze_upload(file: UploadFile, settings: Settings, classifier: Instr
             duration = await anyio.to_thread.run_sync(decode_audio, source, decoded, settings)
             await anyio.lowlevel.checkpoint()
             provider_result = None
-            async with aclosing(classifier.analyze(decoded, duration, threshold)) as updates:
+            fallback = fallback and settings.instrument_provider == "yamnet"
+            async with aclosing(classifier.analyze(decoded, duration, threshold, fallback=fallback)) as updates:
                 async for update in updates:
                     if isinstance(update, AnalysisProgress):
                         yield update.message()
@@ -51,11 +52,13 @@ async def analyze_upload(file: UploadFile, settings: Settings, classifier: Instr
                 warnings.append(f"{failed} of {len(windows)} analysis intervals failed; these intervals are marked explicitly.")
             if failed < len(windows) and not any(w.instruments for w in windows if w.status == "ok"):
                 warnings.append("No specific musical instrument was confidently detected in successfully analyzed intervals.")
+            if any(w.fallback_used for w in windows):
+                warnings.append("Optional 15% fallback filtering was applied to empty intervals using the same raw predictions, without additional API calls. See each window's effective_threshold and fallback_used.")
             result = AnalysisResult(duration=duration, timeline=merge_timeline(windows), windows=windows,
                                     instrument_tracks=instrument_segments(windows), model=settings.model_name,
                                     provider=settings.instrument_provider,
                                     chunk_duration=settings.chunk_duration if settings.instrument_provider == "yamnet" else None,
-                                    threshold=threshold, failed_chunks=failed, warnings=warnings)
+                                    threshold=threshold, fallback_enabled=fallback, failed_chunks=failed, warnings=warnings)
             yield {"type": "result", "result": result.model_dump()}
     finally:
         with anyio.CancelScope(shield=True):

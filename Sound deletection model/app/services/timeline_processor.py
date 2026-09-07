@@ -7,7 +7,11 @@ def merge_timeline(windows: list[InstrumentWindow]) -> list[TimelineEntry]:
     for window in windows:
         names = {e.name for e in window.instruments}
         previous = groups[-1][-1] if groups else None
-        if previous and abs(previous.end - window.start) < 1e-6 and previous.status == window.status and names == {e.name for e in previous.instruments}:
+        if (previous and abs(previous.end - window.start) < 1e-6
+                and previous.status == window.status and names == {e.name for e in previous.instruments}
+                and previous.message == window.message
+                and previous.effective_threshold == window.effective_threshold
+                and previous.fallback_used == window.fallback_used):
             groups[-1].append(window)
         else:
             groups.append([window])
@@ -20,7 +24,9 @@ def merge_timeline(windows: list[InstrumentWindow]) -> list[TimelineEntry]:
                 totals[event.name] = totals.get(event.name, 0) + event.confidence * (w.end - w.start)
         merged.append(TimelineEntry(start=group[0].start, end=group[-1].end,
                                    instruments=[InstrumentPrediction(name=n, confidence=round(totals[n] / duration, 4)) for n in sorted(totals)],
-                                   status=group[0].status))
+                                   status=group[0].status, message=group[0].message,
+                                   effective_threshold=group[0].effective_threshold,
+                                   fallback_used=group[0].fallback_used))
     return merged
 
 

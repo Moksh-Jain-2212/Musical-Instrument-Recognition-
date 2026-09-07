@@ -8,10 +8,19 @@ class InstrumentPrediction(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class RawPrediction(BaseModel):
+    label: str
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
 class InstrumentWindow(BaseModel):
     start: float
     end: float
     instruments: list[InstrumentPrediction] = Field(default_factory=list)
+    raw_predictions: list[RawPrediction] = Field(default_factory=list)
+    effective_threshold: float | None = None
+    fallback_used: bool = False
+    message: str | None = None
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None
 
@@ -21,6 +30,9 @@ class TimelineEntry(BaseModel):
     end: float
     instruments: list[InstrumentPrediction]
     status: Literal["ok", "failed"]
+    effective_threshold: float | None = None
+    fallback_used: bool = False
+    message: str | None = None
 
 
 class InstrumentSegment(BaseModel):
@@ -37,6 +49,7 @@ class AnalysisResult(BaseModel):
     model: str
     provider: str
     chunk_duration: float | None
-    threshold: float
+    threshold: float = Field(ge=0.05, le=0.80)
+    fallback_enabled: bool = False
     failed_chunks: int
     warnings: list[str]

@@ -108,9 +108,25 @@ YAMNet exposes **61 normalized instrument labels** through the allowlist. Every 
 
 Gemini is constrained to these same display names plus **Strings**, **Woodwinds**, and **Brass** as broad instrument families. This is the application's output vocabulary, not a guarantee that Gemini recognizes every instrument. Unsupported generated names are discarded after validation.
 
-**Removed from all detection results:** Speech, Conversation, Singing/Vocals, Choir, Humming, Rapping, Music, Song, genres, Silence, environmental/human sounds, animals, vehicles, Orchestra, and Musical instrument / Instrument (unspecified). Nothing maps a genre to an instrument. Singing Bowl remains allowed because it is an actual instrument. The bundled full YAMNet label file is retained for validating the hosted response, not for exposing general labels.
+**Excluded from `instruments`, timelines and instrument tracks:** Speech, Conversation, Singing/Vocals, Choir, Humming, Rapping, Music, Song, genres, Silence, environmental/human sounds, animals, vehicles, Orchestra, and Musical instrument / Instrument (unspecified). Nothing maps a genre to an instrument. Singing Bowl remains allowed because it is an actual instrument. The bundled full YAMNet label file is retained for validating the hosted response, and for retaining raw diagnostic labels in `windows[].raw_predictions`. Non-instrument names never become instrument predictions.
 
-If no direct instrument prediction passes the threshold, the interval has `instruments: []`. The UI says **“No specific musical instrument was confidently detected in this interval.”** It never fabricates an instrument, an Instrumental label, or silence. Failed analysis is displayed separately.
+If no direct instrument prediction passes the threshold, the interval has `instruments: []`. Each YAMNet window includes a `message` explaining one of three cases:
+
+- Music, a genre, or a musical/vocal category passed the threshold, but no specific instrument did.
+- None of the top-five predictions passed the threshold.
+- Only non-instrument labels, such as Speech or Silence, passed the threshold.
+
+The player, chronological table and empty-result summary show these explanations. They describe model output, not proven musical content or silence. Failed analysis remains a separate status.
+
+### Raw predictions and optional fallback
+
+Every successfully classified YAMNet chunk retains **all five labels in their original order and with their original scores** in `windows[].raw_predictions`, including Music, Speech, Song, genres and vocal labels. These values are saved before instrument allowlisting, alias normalization or threshold filtering. Expand **Raw YAMNet predictions by chunk** in the UI, or download JSON, to inspect them. Failed chunks have an empty raw list and an explicit error; no scores are fabricated. Gemini has no YAMNet top-five output and leaves this list empty.
+
+Fallback is **off by default**. Enable the checkbox, set `INSTRUMENT_FALLBACK_ENABLED=true`, or pass `?fallback=true` to either analysis endpoint. If a window has no qualifying instruments and the requested threshold is above 0.15, re-filter the **same raw predictions at 0.15**. This makes **no extra API call**. It does not add low-scoring instruments to windows that already have a qualifying instrument, and never raises a selected threshold of 0.15 or lower. `?fallback=false` overrides the environment default. This option applies only to YAMNet.
+
+The result retains the requested `threshold` (normally 0.2) and reports `fallback_enabled`. Each successful YAMNet window records `effective_threshold` and `fallback_used`; the latter means the lower filter was applied, even if it still found no instruments. Fallback intervals are marked in the UI and timeline. Non-instrument labels remain excluded at both thresholds.
+
+**The host returns only its top five labels, not all 521 scores.** Lower thresholds and fallback cannot recover an instrument absent from those five labels. Quiet or background instruments may still be missing.
 
 ## Configuration
 
@@ -121,14 +137,15 @@ If no direct instrument prediction passes the threshold, the interval has `instr
 | `GEMINI_API_KEY` | empty | Gemini API key |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Audio-capable Gemini model with structured-output support |
 | `CHUNK_DURATION` | `5` | YAMNet seconds per nonoverlapping chunk; 3–10 allowed |
-| `CONFIDENCE_THRESHOLD` | `0.30` | Inclusive minimum score, adjustable per analysis in the UI |
+| `CONFIDENCE_THRESHOLD` | `0.20` | Inclusive minimum score; backend accepts 0.05–0.80 and slider accepts 5%–80% |
+| `INSTRUMENT_FALLBACK_ENABLED` | `false` | Optional 0.15 re-filter of empty YAMNet windows using the same raw scores |
 | `API_TIMEOUT_SECONDS` | `45` | Per-request timeout; also Gemini file-preparation wait budget |
 | `API_RETRIES` | `2` | Extra attempts for transient HTTP errors; maximum 3 |
 | `MAX_UPLOAD_MB` | `100` | Maximum uploaded file size |
 | `MAX_DURATION_SECONDS` | `900` | Maximum audio duration, default 15 minutes |
 | `FFMPEG_PATH` | empty | Optional absolute FFmpeg executable path |
 
-Restart after changing `.env`. For Gemini, a longer `API_TIMEOUT_SECONDS` (up to 180) may help with whole recordings. A 0.20 confidence threshold is more permissive; 0.50 is more selective. Scores from either provider are **not guaranteed probabilities of correctness**, and scores from the two providers are not calibrated against one another.
+Restart after changing `.env`. Replace any old `CONFIDENCE_THRESHOLD=1` with `CONFIDENCE_THRESHOLD=0.20`; settings outside 0.05–0.80 are rejected, and out-of-range API query values return HTTP 422 before inference. Reload the page to use the new slider. For Gemini, a longer `API_TIMEOUT_SECONDS` (up to 180) may help with whole recordings. A 0.20 confidence threshold is more permissive; 0.50 is more selective. Scores from either provider are **not guaranteed probabilities of correctness**, and scores from the two providers are not calibrated against one another.
 
 ## Timestamp behavior
 
@@ -138,7 +155,7 @@ Restart after changing `.env`. For Gemini, a longer `API_TIMEOUT_SECONDS` (up to
 
 Both providers feed the same merging code:
 
-1. **Chronological timeline:** adjacent intervals merge only if instrument sets and status match. Scores are duration-weighted averages.
+1. **Chronological timeline:** adjacent intervals merge only if instrument sets, status, diagnostic message, effective threshold and fallback status match. Raw predictions remain attached to the original windows, never averaged into merged rows. Scores are duration-weighted averages.
 2. **Independent instrument tracks:** continuous presence merges even when other instruments enter or leave. Failed or empty intervals break a track.
 3. **Summary:** lists every continuous interval per instrument; overall confidence is weighted by detected duration, excluding gaps.
 
@@ -147,12 +164,12 @@ Intervals use `[start, end)` so playback switches at boundaries. The current dis
 ## API
 
 - `GET /health`: selected provider/model, credential configuration state, FFmpeg availability, settings and `supported_instruments`. Never returns key values. `ready` means locally configured; remote availability/key validity is not checked by this endpoint.
-- `POST /api/analyze`: multipart `file`, optional `threshold` query parameter; returns a complete JSON result.
+- `POST /api/analyze`: multipart `file`, optional `threshold` (0.05–0.80) and `fallback` (boolean) query parameters; returns a complete JSON result.
 - `POST /api/analyze/stream`: same inputs, newline-delimited JSON progress/result/error messages. YAMNet reports completed chunks; Gemini reports upload/preparation/analysis stages without a fabricated percentage.
 - `GET /docs`: interactive API documentation.
 
 ```bash
-curl -X POST 'http://127.0.0.1:8000/api/analyze?threshold=0.30' \
+curl -X POST 'http://127.0.0.1:8000/api/analyze?threshold=0.20' \
   -F 'file=@/path/to/music.mp3'
 ```
 
@@ -171,13 +188,36 @@ Public schema (illustrative excerpt):
   },
   "provider": "yamnet",
   "model": "Google YAMNet v1 (AudioSet, 521 labels)",
-  "threshold": 0.3,
+  "threshold": 0.2,
+  "fallback_enabled": false,
   "chunk_duration": 5,
   "failed_chunks": 0
 }
 ```
 
-Actual responses also contain `windows` (same instrument objects plus per-interval `status` and `error`) and `warnings`. Gemini returns `chunk_duration: null`. The retained `failed_chunks` counter counts failed normalized intervals, including one whole-file interval if Gemini fails.
+Actual responses also contain `windows` (instrument objects, raw predictions, effective threshold, fallback flag, diagnostic message, status and error) and `warnings`. For example, a successful YAMNet window can contain:
+
+```json
+{
+  "start": 0,
+  "end": 5,
+  "raw_predictions": [
+    {"label": "Music", "score": 0.91},
+    {"label": "Speech", "score": 0.80},
+    {"label": "Piano", "score": 0.68},
+    {"label": "Song", "score": 0.40},
+    {"label": "Drum", "score": 0.17}
+  ],
+  "instruments": [{"name": "Piano", "confidence": 0.68}],
+  "effective_threshold": 0.2,
+  "fallback_used": false,
+  "message": null,
+  "status": "ok",
+  "error": null
+}
+```
+
+Gemini returns `chunk_duration: null`. The retained `failed_chunks` counter counts failed normalized intervals, including one whole-file interval if Gemini fails.
 
 **Schema migration:** old `timeline[].events`, separate `confidences`, and `windows[].events` are replaced by `instruments: [{name, confidence}]`; the old top-level track dictionary `instruments` is now `instrument_tracks`. `/health.supported_events` is now `supported_instruments`. The frontend and existing tests were updated together. External consumers of the old Sound Atlas JSON must update these field names.
 
@@ -207,12 +247,13 @@ The existing public YAMNet Space was callable for free during verification. It i
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 node --check app/static/app.js
+node --test tests/frontend.test.cjs
 python -m compileall -q app scripts
 ```
 
 Tests block real outbound provider traffic and use mocked Gemini/Hugging Face responses. They cover the original audio formats, downmix/resampling, timestamps, limits, upload cleanup and progress, plus the instrument allowlist, removed labels, aliases, multiple instruments, independent tracks, Gemini JSON validation, overlapping segments, gap handling, retries, authentication errors, and remote deletion after failure/cancellation.
 
-Continuation verification on 2026-09-07: **112 tests passed**, with two existing test-client dependency deprecation warnings. JavaScript syntax, Python compilation, and diff whitespace checks passed. FastAPI started successfully; `/health` reported ready. A live five-second synthetic-silence upload through `/api/analyze` returned one successful empty instrument interval and no failed chunks. Browser visual verification was unavailable because no browser was connected. Gemini remains verified with mocked responses, not live inference.
+Threshold and raw-prediction verification on 2026-09-07: **150 Python tests and 3 frontend behavior tests passed**, with two existing Python test-client dependency deprecation warnings. Coverage includes both endpoint threshold bounds, exact top-five retention for every chunk, fallback without extra requests, inclusive filtering, empty-result explanations, fallback metadata during merging, decimal slider submission, and separation of raw labels from instrument displays. Frontend tests use a DOM double, not a visual browser session. JavaScript syntax, Python compilation and diff whitespace checks passed. After restart, `/health` reported ready with threshold 0.2; both endpoints rejected `threshold=1` with HTTP 422. A live five-second synthetic-silence upload returned threshold 0.2, all five raw predictions, no instrument predictions, an explanatory message and zero failed chunks. Gemini remains verified with mocked responses, not live inference.
 
 The current host can be checked separately using synthetic silence only:
 
@@ -221,7 +262,7 @@ python -m scripts.verify_hosted --public-probe  # anonymous public test
 python -m scripts.verify_hosted                 # use HF_TOKEN from .env
 ```
 
-These commands make real Hugging Face requests; they are not unit tests. The script intentionally prints raw model labels for verification, whereas the application's analysis responses contain only instruments. No live Gemini call is part of the test suite. `requirements-lock.txt` remains the existing tested dependency snapshot; no new packages were necessary for this update.
+These commands make real Hugging Face requests; they are not unit tests. The script intentionally prints raw model labels for verification, and the application now also retains those labels in its raw diagnostics; final instrument predictions remain instrument-only. No live Gemini call is part of the test suite. `requirements-lock.txt` remains the existing tested dependency snapshot; no new packages were necessary for this update.
 
 ## Modified architecture
 

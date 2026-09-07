@@ -21,6 +21,7 @@ function element(tag, text, className) {
 function error(message) { $("error").textContent = message; $("error").hidden = !message; }
 function resetResults() {
   result = null; lastActiveKey = ""; rowElements = []; tableRows = [];
+  $("raw-details").hidden = true; $("raw-windows").replaceChildren();
   $("instrument-summary").hidden = true; $("results").hidden = true; $("details").hidden = true; $("empty").hidden = false;
   $("active-instruments").replaceChildren(element("span", "Your detected instruments will appear here.", "muted"));
 }
@@ -28,6 +29,7 @@ function setBusy(value) {
   busy = value;
   $("analyze").disabled = value || !selectedFile || !config?.token_configured || !config?.ffmpeg_available;
   $("clear").disabled = value; $("file").disabled = value; $("threshold").disabled = value;
+  $("fallback").disabled = value;
   $("dropzone").setAttribute("aria-disabled", String(value));
   $("progress-area").hidden = !value;
 }
@@ -66,7 +68,9 @@ $("analyze").addEventListener("click", async () => {
   controller = new AbortController();
   const form = new FormData(); form.append("file", selectedFile);
   try {
-    const response = await fetch(`/api/analyze/stream?threshold=${Number($("threshold").value) / 100}`, { method: "POST", body: form, signal: controller.signal });
+    const threshold = Math.min(80, Math.max(5, Number($("threshold").value) || 20)) / 100;
+    const fallback = config.provider === "yamnet" && $("fallback").checked;
+    const response = await fetch(`/api/analyze/stream?threshold=${threshold}&fallback=${fallback}`, { method: "POST", body: form, signal: controller.signal });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(typeof body.detail === "string" ? body.detail : `Request failed (HTTP ${response.status}).`);
@@ -108,11 +112,41 @@ $("analyze").addEventListener("click", async () => {
   } finally { controller = null; setBusy(false); }
 });
 
+function noDetectionMessage(entry) {
+  return entry?.message || "No specific musical instrument was confidently detected in this interval.";
+}
+function emptyResultMessage() {
+  if (result.failed_chunks === result.windows.length) return "Analysis failed. See the errors below.";
+  return [...new Set(result.windows.filter((w) => w.status === "ok" && !w.instruments.length).map(noDetectionMessage))].join(" ");
+}
+function renderRawPredictions() {
+  $("raw-details").hidden = result.provider !== "yamnet";
+  $("raw-windows").replaceChildren();
+  if (result.provider !== "yamnet") return;
+  for (const entry of result.windows) {
+    const section = element("section", undefined, "raw-window");
+    section.append(element("h3", `${time(entry.start, true)} → ${time(entry.end, true)}`));
+    if (entry.status === "failed") {
+      section.append(element("p", entry.error || "Analysis failed; raw predictions are unavailable."));
+    } else {
+      section.append(element("p", `Filtering at ${Math.round(entry.effective_threshold * 100)}%${entry.fallback_used ? " · fallback applied using the same predictions" : ""}`));
+      if (entry.message) section.append(element("p", entry.message));
+      const list = element("ul");
+      for (const prediction of entry.raw_predictions) {
+        list.append(element("li", `${prediction.label} — ${(prediction.score * 100).toFixed(2)}%`));
+      }
+      section.append(list);
+    }
+    $("raw-windows").append(section);
+  }
+}
+
 function renderResults() {
   $("empty").hidden = true; $("results").hidden = false; $("details").hidden = false;
   $("resolution").textContent = result.chunk_duration ? `${result.chunk_duration} SECOND RESOLUTION` : "ESTIMATED TIMESTAMPS";
   $("result-summary").textContent = `${Object.keys(result.instrument_tracks).length} instruments · ${time(result.duration, true)}`;
   $("player-hint").textContent = `Analyzed at ${Math.round(result.threshold * 100)}% confidence. Play or seek to explore.`;
+  if (result.windows.some((w) => w.fallback_used)) $("player-hint").textContent += " 15% fallback was applied to some intervals.";
   const axis = $("axis"); axis.replaceChildren();
   for (let i = 0; i <= 5; i++) {
     const label = element("span", time(result.duration * i / 5, result.duration < 5));
@@ -134,8 +168,9 @@ function renderResults() {
     }
     row.append(label, lane); $("tracks").append(row); rowElements.push({ name, row });
   });
-  if (!rowElements.length) $("tracks").append(element("p", result.failed_chunks === result.windows.length ? "Analysis failed. See the errors below." : "No specific musical instrument was confidently detected.", "muted"));
+  if (!rowElements.length) $("tracks").append(element("p", emptyResultMessage(), "muted"));
   renderInstrumentSummary();
+  renderRawPredictions();
   $("warnings").replaceChildren(...result.warnings.map((message) => element("p", message)));
   const failures = [...new Set(result.windows.filter((w) => w.error).map((w) => w.error))];
   for (const message of failures) $("warnings").append(element("p", message));
@@ -143,8 +178,8 @@ function renderResults() {
   for (const entry of result.timeline) {
     const row = element("tr"), start = element("td"), button = element("button", time(entry.start, true), "seek-button");
     button.addEventListener("click", () => { audio.currentTime = entry.start; updatePlayback(); }); start.append(button);
-    row.append(start, element("td", time(entry.end, true)), element("td", entry.status === "failed" ? "Analysis failed" : entry.instruments.map((instrument) => instrument.name).join(" + ") || "No specific musical instrument was confidently detected in this interval."),
-      element("td", entry.instruments.map((instrument) => `${instrument.name} ${Math.round(instrument.confidence * 100)}%`).join(" · ") || "—"));
+    row.append(start, element("td", time(entry.end, true)), element("td", entry.status === "failed" ? "Analysis failed" : entry.instruments.map((instrument) => instrument.name).join(" + ") || noDetectionMessage(entry)),
+      element("td", (entry.instruments.map((instrument) => `${instrument.name} ${Math.round(instrument.confidence * 100)}%`).join(" · ") || "—") + (entry.fallback_used ? " · 15% fallback" : "")));
     $("table-body").append(row); tableRows.push({ entry, row });
   }
   lastActiveKey = ""; updatePlayback();
@@ -168,7 +203,7 @@ function renderInstrumentSummary() {
     $("summary-grid").append(card);
   }
   if (!Object.keys(result.instrument_tracks).length) $("summary-grid").append(element("p",
-    result.failed_chunks === result.windows.length ? "Analysis failed. No instrument results are available." : "No specific musical instrument was confidently detected.", "muted"));
+    emptyResultMessage(), "muted"));
 }
 
 function updatePlayback() {
@@ -185,7 +220,8 @@ function updatePlayback() {
     lastActiveKey = key;
     const events = window?.instruments || [];
     $("active-instruments").replaceChildren(...events.map((e) => element("span", `${e.name} · ${Math.round(e.confidence * 100)}%`, "instrument-chip")));
-    if (!events.length) $("active-instruments").append(element("span", !window ? "End of audio." : window.status === "failed" ? "This interval could not be analyzed." : "No specific musical instrument was confidently detected in this interval.", "muted"));
+    if (!events.length) $("active-instruments").append(element("span", !window ? "End of audio." : window.status === "failed" ? "This interval could not be analyzed." : noDetectionMessage(window), "muted"));
+    if (window?.fallback_used) $("active-instruments").append(element("span", "15% fallback", "muted"));
     for (const { name, row } of rowElements) row.classList.toggle("active", events.some((e) => e.name === name));
     for (const { entry, row } of tableRows) row.classList.toggle("current", current >= entry.start && current < entry.end);
   }
@@ -210,6 +246,8 @@ $("download").addEventListener("click", () => {
     $("setup").hidden = config.token_configured;
     if (!config.token_configured) $("setup").textContent = `Set ${config.required_credential} in .env and restart the server. See README.md for API key setup.`;
     const gemini = config.provider === "gemini";
+    $("fallback-setting").hidden = gemini;
+    $("fallback").checked = !gemini && config.instrument_fallback_enabled === true;
     $("supported-list").replaceChildren(...config.supported_instruments.map((name) => element("li", name)));
     $("supported-count").textContent = `(${config.supported_instruments.length})`;
     $("supported-note").textContent = gemini
@@ -225,7 +263,7 @@ $("download").addEventListener("click", () => {
       : "YAMNet exposes only its top 5 predictions per chunk; broad labels can displace instruments.";
     $("max-size").textContent = config.max_upload_mb;
     $("resolution").textContent = config.chunk_duration ? `${config.chunk_duration} SECOND RESOLUTION` : "ESTIMATED TIMESTAMPS";
-    $("threshold").value = Math.round(config.confidence_threshold * 100);
+    $("threshold").value = Math.min(80, Math.max(5, Math.round((config.confidence_threshold ?? 0.2) * 100)));
     $("threshold-value").textContent = `${$("threshold").value}%`;
     if (!config.ffmpeg_available) error("FFmpeg is unavailable. Install it or set FFMPEG_PATH, then restart.");
     setBusy(false);

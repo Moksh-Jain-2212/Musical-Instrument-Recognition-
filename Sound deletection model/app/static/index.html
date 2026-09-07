@@ -18,8 +18,9 @@
           <input id="file" type="file" accept="audio/*,.m4a,.webm,.mp3,.wav" hidden>
         </label>
         <div id="file-info" class="file-info" hidden><span class="file-symbol">♫</span><div><strong id="file-name"></strong><small id="file-meta"></small></div><button id="clear" class="icon-button" aria-label="Remove selected audio">×</button></div>
-        <div class="setting"><label for="threshold">Detection confidence</label><output id="threshold-value" for="threshold">30%</output></div>
-        <input id="threshold" type="range" min="1" max="100" value="30" step="1"><div class="range-labels"><span>More sensitive</span><span>More selective</span></div>
+        <div class="setting"><label for="threshold">Detection confidence</label><output id="threshold-value" for="threshold">20%</output></div>
+        <input id="threshold" type="range" min="5" max="80" value="20" step="1"><div class="range-labels"><span>More sensitive · 5%</span><span>More selective · 80%</span></div>
+        <label id="fallback-setting" class="fallback-setting" hidden><input id="fallback" type="checkbox"> Try 15% if no instrument passes the selected threshold. Uses the same predictions; no extra requests.</label>
         <button id="analyze" class="primary" disabled>Analyze Instruments <span>↗</span></button>
         <div id="progress-area" hidden><progress id="progress" max="100"></progress><p id="progress-text" role="status"></p><button id="cancel" class="text-button">Cancel analysis</button></div>
         <p id="error" class="error" role="alert" hidden></p>
@@ -37,6 +38,11 @@
     <section id="instrument-summary" class="card details" hidden><div class="section-heading"><span class="step">03</span><h2>Instruments Found</h2></div><div id="summary-grid" class="summary-grid"></div></section>
     <section id="details" class="card details" hidden><div class="section-heading"><span class="step">04</span><h2>Moment by moment</h2><button id="download" class="secondary">Download JSON ↓</button></div><div class="table-scroll"><table><thead><tr><th>From</th><th>To</th><th>Instruments detected</th><th>Confidence</th></tr></thead><tbody id="table-body"></tbody></table></div></section>
     <footer><span>INSTRUMENT TIMELINE <span class="footer-dot">·</span> <span id="provider-label">Powered by hosted YAMNet</span></span><p>Model scores are not guaranteed probabilities of correctness.<br><span id="provider-limitation">YAMNet exposes only its top 5 predictions per chunk; instruments can be missed.</span></p></footer>
+    <details id="raw-details" class="card supported-instruments" hidden>
+      <summary>Raw YAMNet predictions by chunk</summary>
+      <p>The host returns only its top five labels, including non-instruments. Missing instruments cannot be recovered by filtering. These diagnostic labels are excluded from the instrument timeline.</p>
+      <div id="raw-windows"></div>
+    </details>
     <details id="supported-instruments" class="card supported-instruments" hidden>
       <summary>Supported instruments <span id="supported-count"></span></summary>
       <p id="supported-note"></p>
