@@ -7,9 +7,10 @@ let config = null, frame = null, lastActiveKey = "", rowElements = [], tableRows
 
 function time(seconds, precise = false) {
   if (!Number.isFinite(seconds)) seconds = 0;
+  if (precise) seconds = Math.round(seconds * 10) / 10;
   const minutes = Math.floor(seconds / 60);
   const rest = seconds - minutes * 60;
-  return `${String(minutes).padStart(2, "0")}:${precise && rest % 1 ? rest.toFixed(1).padStart(4, "0") : String(Math.floor(rest)).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${precise ? rest.toFixed(1).padStart(4, "0") : String(Math.floor(rest)).padStart(2, "0")}`;
 }
 function element(tag, text, className) {
   const el = document.createElement(tag);
@@ -20,8 +21,8 @@ function element(tag, text, className) {
 function error(message) { $("error").textContent = message; $("error").hidden = !message; }
 function resetResults() {
   result = null; lastActiveKey = ""; rowElements = []; tableRows = [];
-  $("results").hidden = true; $("details").hidden = true; $("empty").hidden = false;
-  $("active-sounds").replaceChildren(element("span", "Your detected sounds will appear here.", "muted"));
+  $("instrument-summary").hidden = true; $("results").hidden = true; $("details").hidden = true; $("empty").hidden = false;
+  $("active-instruments").replaceChildren(element("span", "Your detected instruments will appear here.", "muted"));
 }
 function setBusy(value) {
   busy = value;
@@ -80,7 +81,15 @@ $("analyze").addEventListener("click", async () => {
         if (event.total) {
           $("progress").value = event.completed / event.total * 100;
           $("progress-text").textContent = `Analyzed ${event.completed} of ${event.total} chunks${event.completed < event.total ? " · listening…" : ""}`;
-        } else $("progress-text").textContent = "Decoding your audio…";
+        } else {
+          $("progress").removeAttribute("value");
+          $("progress-text").textContent = {
+            decoding: "Decoding your audio…",
+            uploading_to_gemini: "Uploading the complete audio to Gemini…",
+            preparing_gemini_audio: "Gemini is preparing the recording…",
+            analyzing_instruments: "Gemini is estimating instrument timestamps…",
+          }[event.stage] || "Processing your audio…";
+        }
       }
       if (event.type === "result") { result = event.result; receivedResult = true; renderResults(); }
     };
@@ -101,8 +110,8 @@ $("analyze").addEventListener("click", async () => {
 
 function renderResults() {
   $("empty").hidden = true; $("results").hidden = false; $("details").hidden = false;
-  $("resolution").textContent = `${result.chunk_duration} SECOND RESOLUTION`;
-  $("result-summary").textContent = `${Object.keys(result.instruments).length} sounds · ${time(result.duration, true)}`;
+  $("resolution").textContent = result.chunk_duration ? `${result.chunk_duration} SECOND RESOLUTION` : "ESTIMATED TIMESTAMPS";
+  $("result-summary").textContent = `${Object.keys(result.instrument_tracks).length} instruments · ${time(result.duration, true)}`;
   $("player-hint").textContent = `Analyzed at ${Math.round(result.threshold * 100)}% confidence. Play or seek to explore.`;
   const axis = $("axis"); axis.replaceChildren();
   for (let i = 0; i <= 5; i++) {
@@ -110,7 +119,7 @@ function renderResults() {
     label.style.left = `${i * 20}%`; axis.append(label);
   }
   $("tracks").replaceChildren(); rowElements = [];
-  Object.entries(result.instruments).sort(([a], [b]) => a.localeCompare(b)).forEach(([name, segments], index) => {
+  Object.entries(result.instrument_tracks).sort(([a], [b]) => a.localeCompare(b)).forEach(([name, segments], index) => {
     const row = element("div", undefined, "track-row"); row.style.setProperty("--track-color", colors[index % colors.length]);
     const label = element("div", undefined, "track-name"); label.append(element("span", undefined, "dot"), document.createTextNode(name));
     const lane = element("div", undefined, "track-lane");
@@ -125,7 +134,8 @@ function renderResults() {
     }
     row.append(label, lane); $("tracks").append(row); rowElements.push({ name, row });
   });
-  if (!rowElements.length) $("tracks").append(element("p", result.failed_chunks === result.windows.length ? "All chunks failed. See the errors below." : "No supported sounds exceeded your threshold.", "muted"));
+  if (!rowElements.length) $("tracks").append(element("p", result.failed_chunks === result.windows.length ? "Analysis failed. See the errors below." : "No specific musical instrument was confidently detected.", "muted"));
+  renderInstrumentSummary();
   $("warnings").replaceChildren(...result.warnings.map((message) => element("p", message)));
   const failures = [...new Set(result.windows.filter((w) => w.error).map((w) => w.error))];
   for (const message of failures) $("warnings").append(element("p", message));
@@ -133,28 +143,49 @@ function renderResults() {
   for (const entry of result.timeline) {
     const row = element("tr"), start = element("td"), button = element("button", time(entry.start, true), "seek-button");
     button.addEventListener("click", () => { audio.currentTime = entry.start; updatePlayback(); }); start.append(button);
-    row.append(start, element("td", time(entry.end, true)), element("td", entry.status === "failed" ? "Analysis failed" : entry.events.join(" + ") || "No confident detection"),
-      element("td", entry.events.map((name) => `${name} ${Math.round(entry.confidences[name] * 100)}%`).join(" · ") || "—"));
+    row.append(start, element("td", time(entry.end, true)), element("td", entry.status === "failed" ? "Analysis failed" : entry.instruments.map((instrument) => instrument.name).join(" + ") || "No specific musical instrument was confidently detected in this interval."),
+      element("td", entry.instruments.map((instrument) => `${instrument.name} ${Math.round(instrument.confidence * 100)}%`).join(" · ") || "—"));
     $("table-body").append(row); tableRows.push({ entry, row });
   }
   lastActiveKey = ""; updatePlayback();
 }
 
+function renderInstrumentSummary() {
+  $("instrument-summary").hidden = false;
+  $("summary-grid").replaceChildren();
+  for (const [name, segments] of Object.entries(result.instrument_tracks).sort(([a], [b]) => a.localeCompare(b))) {
+    const card = element("article", undefined, "instrument-summary-card");
+    card.append(element("h3", name));
+    const duration = segments.reduce((total, segment) => total + segment.end - segment.start, 0);
+    const score = segments.reduce((total, segment) => total + segment.average_confidence * (segment.end - segment.start), 0) / duration;
+    card.append(element("p", `Average confidence: ${Math.round(score * 100)}%`));
+    for (const segment of segments) {
+      const button = element("button", `${time(segment.start, true)} → ${time(segment.end, true)} · ${Math.round(segment.average_confidence * 100)}%`, "summary-seek");
+      button.setAttribute("aria-label", `Seek to ${name} at ${time(segment.start, true)}`);
+      button.addEventListener("click", () => { audio.currentTime = segment.start; updatePlayback(); });
+      card.append(button);
+    }
+    $("summary-grid").append(card);
+  }
+  if (!Object.keys(result.instrument_tracks).length) $("summary-grid").append(element("p",
+    result.failed_chunks === result.windows.length ? "Analysis failed. No instrument results are available." : "No specific musical instrument was confidently detected.", "muted"));
+}
+
 function updatePlayback() {
   const current = audio.currentTime || 0;
   const duration = result?.duration || (Number.isFinite(audio.duration) ? audio.duration : 0);
-  $("clock").textContent = `${time(current)} / ${time(duration, true)}`;
+  $("clock").textContent = `${time(current, true)} / ${time(duration, true)}`;
   if (!result) return;
   const fraction = Math.min(1, Math.max(0, current / result.duration));
   $("playhead").style.left = `calc(var(--label-width) + (100% - var(--label-width)) * ${fraction})`;
-  // Raw chunk scores determine current events; merged rows only summarize them.
+  // Provider-normalized windows determine current instruments; merged rows summarize them.
   const window = result.windows.find((w) => current >= w.start && current < w.end);
   const key = window ? `${window.start}:${window.status}` : "ended";
   if (key !== lastActiveKey) {
     lastActiveKey = key;
-    const events = window?.events || [];
-    $("active-sounds").replaceChildren(...events.map((e) => element("span", `${e.name} · ${Math.round(e.confidence * 100)}%`, "sound-chip")));
-    if (!events.length) $("active-sounds").append(element("span", !window ? "End of audio." : window.status === "failed" ? "This interval could not be analyzed." : "No confident detection in this interval.", "muted"));
+    const events = window?.instruments || [];
+    $("active-instruments").replaceChildren(...events.map((e) => element("span", `${e.name} · ${Math.round(e.confidence * 100)}%`, "instrument-chip")));
+    if (!events.length) $("active-instruments").append(element("span", !window ? "End of audio." : window.status === "failed" ? "This interval could not be analyzed." : "No specific musical instrument was confidently detected in this interval.", "muted"));
     for (const { name, row } of rowElements) row.classList.toggle("active", events.some((e) => e.name === name));
     for (const { entry, row } of tableRows) row.classList.toggle("current", current >= entry.start && current < entry.end);
   }
@@ -167,7 +198,7 @@ window.addEventListener("beforeunload", () => { if (objectURL) URL.revokeObjectU
 $("download").addEventListener("click", () => {
   if (!result) return;
   const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: "application/json" }));
-  const link = element("a"); link.href = url; link.download = "sound-atlas-analysis.json"; link.click();
+  const link = element("a"); link.href = url; link.download = "instrument-timeline-analysis.json"; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 (async () => {
@@ -177,8 +208,23 @@ $("download").addEventListener("click", () => {
     $("connection").textContent = config.status === "ready" ? "● API configured" : "○ Setup needed";
     $("connection").classList.toggle("ready", config.status === "ready");
     $("setup").hidden = config.token_configured;
+    if (!config.token_configured) $("setup").textContent = `Set ${config.required_credential} in .env and restart the server. See README.md for API key setup.`;
+    const gemini = config.provider === "gemini";
+    $("supported-list").replaceChildren(...config.supported_instruments.map((name) => element("li", name)));
+    $("supported-count").textContent = `(${config.supported_instruments.length})`;
+    $("supported-note").textContent = gemini
+      ? "Gemini results use these instrument names and families. Recognition is an estimate and can miss or confuse instruments."
+      : "These names come from YAMNet's supported instrument labels. Combined names such as Marimba / Xylophone cannot be distinguished by this model.";
+    $("supported-instruments").hidden = false;
+    $("provider-label").textContent = gemini ? `Powered by ${config.model}` : "Powered by hosted YAMNet";
+    $("privacy-copy").textContent = gemini
+      ? "The complete recording is sent to Google Gemini. Local files are deleted after analysis; temporary Google upload deletion is requested."
+      : "Audio chunks are sent to a community Hugging Face Space. Local copies are deleted after analysis; the host may cache uploads.";
+    $("provider-limitation").textContent = gemini
+      ? "Gemini estimates instruments and timing semantically; similar or quiet instruments can be missed or confused."
+      : "YAMNet exposes only its top 5 predictions per chunk; broad labels can displace instruments.";
     $("max-size").textContent = config.max_upload_mb;
-    $("resolution").textContent = `${config.chunk_duration} SECOND RESOLUTION`;
+    $("resolution").textContent = config.chunk_duration ? `${config.chunk_duration} SECOND RESOLUTION` : "ESTIMATED TIMESTAMPS";
     $("threshold").value = Math.round(config.confidence_threshold * 100);
     $("threshold-value").textContent = `${$("threshold").value}%`;
     if (!config.ffmpeg_available) error("FFmpeg is unavailable. Install it or set FFMPEG_PATH, then restart.");

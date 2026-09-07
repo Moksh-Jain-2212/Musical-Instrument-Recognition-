@@ -4,6 +4,7 @@ import struct
 import wave
 
 import pytest
+import httpx
 
 from app.config import Settings
 
@@ -21,7 +22,14 @@ def wav_bytes(duration=1, rate=16000, channels=1, silent=False):
 
 @pytest.fixture
 def settings():
-    return Settings(_env_file=None, hf_token="hf_test_not_a_real_token", api_retries=0)
+    return Settings(_env_file=None, instrument_provider="yamnet", hf_token="hf_test_not_a_real_token", gemini_api_key="", api_retries=0)
+
+
+@pytest.fixture(autouse=True)
+def forbid_live_http(monkeypatch):
+    async def blocked(*args, **kwargs):
+        raise AssertionError("Unit tests must not call real hosted providers")
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
 
 
 @pytest.fixture

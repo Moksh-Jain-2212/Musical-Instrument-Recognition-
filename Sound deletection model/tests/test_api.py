@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.services.hosted_classifier import ProviderError
+from app.models.schemas import InstrumentPrediction, InstrumentWindow
+from app.services.instrument_classifier import AnalysisProgress, ProviderResult
+from app.services.labels import SUPPORTED_INSTRUMENTS
 from tests.conftest import wav_bytes
 
 
@@ -51,8 +54,8 @@ def test_analyze_partial_failure_and_cleanup(settings, monkeypatch):
         data = response.json()
         assert data["duration"] == 11 and data["failed_chunks"] == 1
         assert data["windows"][1]["status"] == "failed"
-        assert len(data["instruments"]["Piano"]) == 2
-        assert data["timeline"][0]["events"] == ["Drums", "Piano"]
+        assert len(data["instrument_tracks"]["Piano"]) == 2
+        assert [item["name"] for item in data["timeline"][0]["instruments"]] == ["Drums", "Piano"]
     assert classifier.calls == 3
     assert all(not Path(path).exists() for path in paths)
 
@@ -87,13 +90,14 @@ def test_fatal_auth_does_not_send_remaining_chunks(settings):
     with TestClient(create_app(settings, classifier)) as client:
         response = client.post("/api/analyze", files={"file": ("a.wav", wav_bytes(11))})
         assert response.json()["failed_chunks"] == 3
+        assert not any("No specific musical instrument" in warning for warning in response.json()["warnings"])
         assert classifier.calls == 1
 
 
 def test_threshold_override(settings):
     with TestClient(create_app(settings, Classifier())) as client:
         result = client.post("/api/analyze?threshold=0.85", files={"file": ("a.wav", wav_bytes())}).json()
-        assert result["timeline"][0]["events"] == ["Piano"]
+        assert [item["name"] for item in result["timeline"][0]["instruments"]] == ["Piano"]
 
 
 def test_stream_error_releases_resources(settings):
@@ -101,3 +105,69 @@ def test_stream_error_releases_resources(settings):
         response = client.post("/api/analyze/stream", files={"file": ("bad.wav", b"bad")})
         assert json.loads(response.text.splitlines()[-1])["type"] == "error"
         assert client.post("/api/analyze", files={"file": ("ok.wav", wav_bytes())}).status_code == 200
+
+
+def test_public_schema_and_health_are_instrument_only(settings):
+    class MixedClassifier:
+        async def classify(self, wav):
+            return [{"label": name, "score": .95} for name in ("Music", "Speech", "Piano", "Drum", "Rock music")]
+    with TestClient(create_app(settings, MixedClassifier())) as client:
+        health = client.get("/health").json()
+        assert health["provider"] == "yamnet"
+        assert health["supported_instruments"] == list(SUPPORTED_INSTRUMENTS)
+        assert "supported_events" not in health
+        assert not {"Speech", "Music", "Silence", "Vocals", "Orchestra"} & set(health["supported_instruments"])
+        result = client.post("/api/analyze", files={"file": ("a.wav", wav_bytes())}).json()
+        assert set(result["instrument_tracks"]) == {"Piano", "Drums"}
+        assert "instruments" not in result
+        for window in result["windows"] + result["timeline"]:
+            assert "events" not in window and "sounds" not in window
+            assert {i["name"] for i in window["instruments"]} == {"Piano", "Drums"}
+
+
+def test_no_specific_instrument_case(settings):
+    class MusicOnly:
+        async def classify(self, wav):
+            return [{"label": "Music", "score": .99}, {"label": "Rock music", "score": .98}, {"label": "Song", "score": .95}]
+    with TestClient(create_app(settings, MusicOnly())) as client:
+        result = client.post("/api/analyze", files={"file": ("a.wav", wav_bytes())}).json()
+        assert result["timeline"][0]["instruments"] == []
+        assert result["instrument_tracks"] == {} and result["failed_chunks"] == 0
+        assert any("No specific musical instrument" in warning for warning in result["warnings"])
+
+
+def test_gemini_requires_its_key_not_hf_token(settings):
+    settings.instrument_provider = "gemini"
+    with TestClient(create_app(settings)) as client:
+        health = client.get("/health").json()
+        assert health["required_credential"] == "GEMINI_API_KEY"
+        assert health["status"] == "configuration_required" and health["chunk_duration"] is None
+        result = client.post("/api/analyze", files={"file": ("a.wav", wav_bytes())})
+        assert result.status_code == 503 and "GEMINI_API_KEY" in result.json()["detail"]
+        assert "hf_test_not_a_real_token" not in json.dumps(health)
+
+
+def test_gemini_common_result_and_stream(settings):
+    settings.instrument_provider = "gemini"
+    settings.gemini_api_key = type(settings.hf_token)("gemini_test_key")
+    settings.hf_token = type(settings.hf_token)("")
+    paths = []
+    class SemanticProvider:
+        async def analyze(self, path, duration, threshold):
+            paths.append(path)
+            assert path.exists()
+            yield AnalysisProgress("analyzing_instruments")
+            yield ProviderResult([InstrumentWindow(start=0, end=duration,
+                instruments=[InstrumentPrediction(name="Piano", confidence=.85)])], ["Semantic estimates"])
+    with TestClient(create_app(settings, instrument_classifier=SemanticProvider())) as client:
+        health = client.get("/health").json()
+        assert health["status"] == "ready" and health["provider"] == "gemini"
+        assert "gemini_test_key" not in json.dumps(health)
+        response = client.post("/api/analyze/stream", files={"file": ("a.wav", wav_bytes(6))})
+        messages = [json.loads(line) for line in response.text.splitlines()]
+        assert any(m.get("stage") == "analyzing_instruments" for m in messages)
+        result = messages[-1]["result"]
+        assert result["provider"] == "gemini" and result["chunk_duration"] is None
+        assert result["timeline"][0]["instruments"] == [{"name": "Piano", "confidence": .85}]
+        assert set(result["instrument_tracks"]) == {"Piano"}
+    assert all(not path.exists() for path in paths)

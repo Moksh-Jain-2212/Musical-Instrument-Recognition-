@@ -1,15 +1,14 @@
-import asyncio
-import math
 import tempfile
+from contextlib import aclosing
 from pathlib import Path
 
+import anyio
 from fastapi import UploadFile
 
-from app.config import MODEL_NAME, SPACE_ID, Settings
-from app.models.schemas import AnalysisResult, Window
-from app.services.audio_processing import AudioError, decode_audio, iter_chunks
-from app.services.hosted_classifier import HostedClassifier, ProviderError
-from app.services.labels import filter_events
+from app.config import Settings
+from app.models.schemas import AnalysisResult
+from app.services.audio_processing import AudioError, decode_audio
+from app.services.instrument_classifier import AnalysisProgress, InstrumentClassifier, ProviderResult
 from app.services.timeline_processor import instrument_segments, merge_timeline
 
 
@@ -17,10 +16,10 @@ class UploadTooLarge(AudioError):
     pass
 
 
-async def analyze_upload(file: UploadFile, settings: Settings, classifier: HostedClassifier, threshold: float):
+async def analyze_upload(file: UploadFile, settings: Settings, classifier: InstrumentClassifier, threshold: float):
     """Yield real progress followed by the result. All local files are temporary."""
     try:
-        with tempfile.TemporaryDirectory(prefix="sound-atlas-") as folder:
+        with tempfile.TemporaryDirectory(prefix="instrument-timeline-") as folder:
             source = Path(folder) / "upload.audio"
             decoded = Path(folder) / "decoded.wav"
             total_bytes = 0
@@ -33,36 +32,31 @@ async def analyze_upload(file: UploadFile, settings: Settings, classifier: Hoste
             if not total_bytes:
                 raise AudioError("The uploaded file is empty.")
             yield {"type": "progress", "stage": "decoding", "completed": 0, "total": None}
-            duration = await asyncio.to_thread(decode_audio, source, decoded, settings)
-            count = math.ceil(round(duration * 16000) / round(settings.chunk_duration * 16000))
-            windows = []
-            fatal_error = None
-            yield {"type": "progress", "stage": "classifying", "completed": 0, "total": count}
-            for index, (start, end, wav) in enumerate(iter_chunks(decoded, settings.chunk_duration)):
-                try:
-                    if fatal_error:
-                        raise fatal_error
-                    scores = await classifier.classify(wav)
-                    window = Window(start=start, end=end, events=filter_events(scores, threshold))
-                except ProviderError as exc:
-                    if exc.fatal:
-                        fatal_error = exc
-                    window = Window(start=start, end=end, status="failed", error=str(exc))
-                windows.append(window)
-                yield {"type": "progress", "stage": "classifying", "completed": index + 1, "total": count}
+            # Finish the worker before cancellation removes the files it is using.
+            duration = await anyio.to_thread.run_sync(decode_audio, source, decoded, settings)
+            await anyio.lowlevel.checkpoint()
+            provider_result = None
+            async with aclosing(classifier.analyze(decoded, duration, threshold)) as updates:
+                async for update in updates:
+                    if isinstance(update, AnalysisProgress):
+                        yield update.message()
+                    elif isinstance(update, ProviderResult):
+                        provider_result = update
+            if provider_result is None:
+                raise RuntimeError("Instrument provider did not return a result")
+            windows = provider_result.windows
             failed = sum(w.status == "failed" for w in windows)
-            warnings = [
-                "Community-hosted YAMNet returns only its top five AudioSet labels per chunk; other sounds may be omitted.",
-                "Timestamps have chunk-level resolution. Scores are model estimates, not calibrated guarantees.",
-            ]
+            warnings = list(provider_result.warnings)
             if failed:
-                warnings.append(f"{failed} of {len(windows)} chunks could not be analyzed; failed intervals are marked explicitly.")
-            if not any(w.events for w in windows if w.status == "ok"):
-                warnings.append("No supported sounds exceeded the threshold in successfully analyzed chunks.")
+                warnings.append(f"{failed} of {len(windows)} analysis intervals failed; these intervals are marked explicitly.")
+            if failed < len(windows) and not any(w.instruments for w in windows if w.status == "ok"):
+                warnings.append("No specific musical instrument was confidently detected in successfully analyzed intervals.")
             result = AnalysisResult(duration=duration, timeline=merge_timeline(windows), windows=windows,
-                                    instruments=instrument_segments(windows), model=MODEL_NAME,
-                                    provider=f"Hugging Face Space: {SPACE_ID}", chunk_duration=settings.chunk_duration,
+                                    instrument_tracks=instrument_segments(windows), model=settings.model_name,
+                                    provider=settings.instrument_provider,
+                                    chunk_duration=settings.chunk_duration if settings.instrument_provider == "yamnet" else None,
                                     threshold=threshold, failed_chunks=failed, warnings=warnings)
             yield {"type": "result", "result": result.model_dump()}
     finally:
-        await file.close()
+        with anyio.CancelScope(shield=True):
+            await file.close()

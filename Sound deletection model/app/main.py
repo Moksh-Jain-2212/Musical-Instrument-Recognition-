@@ -8,27 +8,31 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import MODEL_NAME, SPACE_ID, Settings
+from app.config import Settings
 from app.models.schemas import AnalysisResult
 from app.services.analysis import UploadTooLarge, analyze_upload
 from app.services.audio_processing import AudioError, ffmpeg_executable
 from app.services.hosted_classifier import HostedClassifier
-from app.services.labels import LABEL_MAP
+from app.services.gemini_classifier import GeminiInstrumentClassifier
+from app.services.labels import GEMINI_INSTRUMENTS, SUPPORTED_INSTRUMENTS
+from app.services.yamnet_classifier import YAMNetInstrumentClassifier
 
 STATIC = Path(__file__).parent / "static"
 
 
-def create_app(settings: Settings | None = None, classifier=None) -> FastAPI:
+def create_app(settings: Settings | None = None, classifier=None, instrument_classifier=None) -> FastAPI:
     config = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with httpx.AsyncClient(follow_redirects=False) as client:
-            app.state.classifier = classifier or HostedClassifier(config, client)
+            app.state.classifier = instrument_classifier or (
+                GeminiInstrumentClassifier(config, client) if config.instrument_provider == "gemini"
+                else YAMNetInstrumentClassifier(config, classifier or HostedClassifier(config, client)))
             app.state.busy = asyncio.Lock()
             yield
 
-    app = FastAPI(title="Sound Atlas", lifespan=lifespan)
+    app = FastAPI(title="Musical Instrument Detector", lifespan=lifespan)
 
     @app.middleware("http")
     async def upload_limit(request: Request, call_next):
@@ -51,18 +55,20 @@ def create_app(settings: Settings | None = None, classifier=None) -> FastAPI:
             ffmpeg = True
         except AudioError:
             ffmpeg = False
-        token = bool(config.hf_token.get_secret_value().strip())
+        token = config.credential_configured
         return {"status": "ready" if token and ffmpeg else "configuration_required",
                 "token_configured": token, "ffmpeg_available": ffmpeg,
-                "provider": SPACE_ID, "model": MODEL_NAME, "hosted_availability": "not_checked",
-                "chunk_duration": config.chunk_duration, "confidence_threshold": config.confidence_threshold,
+                "provider": config.instrument_provider, "model": config.model_name, "hosted_availability": "not_checked",
+                "required_credential": config.credential_name,
+                "chunk_duration": config.chunk_duration if config.instrument_provider == "yamnet" else None,
+                "confidence_threshold": config.confidence_threshold,
                 "max_upload_mb": config.max_upload_mb, "max_duration_seconds": config.max_duration_seconds,
-                "supported_events": sorted(set(LABEL_MAP.values()))}
+                "supported_instruments": list(GEMINI_INSTRUMENTS if config.instrument_provider == "gemini" else SUPPORTED_INSTRUMENTS)}
 
     async def prepare(file: UploadFile):
-        if not config.hf_token.get_secret_value().strip():
+        if not config.credential_configured:
             await file.close()
-            raise HTTPException(503, "Set HF_TOKEN in .env and restart the server. See README.md for token setup.")
+            raise HTTPException(503, f"Set {config.credential_name} in .env and restart the server. See README.md for key setup.")
         if app.state.busy.locked():
             await file.close()
             raise HTTPException(429, "Another analysis is running. Please wait until it finishes.")

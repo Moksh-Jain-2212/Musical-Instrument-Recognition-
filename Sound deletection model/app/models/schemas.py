@@ -3,15 +3,15 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class Event(BaseModel):
+class InstrumentPrediction(BaseModel):
     name: str
     confidence: float = Field(ge=0, le=1)
 
 
-class Window(BaseModel):
+class InstrumentWindow(BaseModel):
     start: float
     end: float
-    events: list[Event] = Field(default_factory=list)
+    instruments: list[InstrumentPrediction] = Field(default_factory=list)
     status: Literal["ok", "failed"] = "ok"
     error: str | None = None
 
@@ -19,12 +19,11 @@ class Window(BaseModel):
 class TimelineEntry(BaseModel):
     start: float
     end: float
-    events: list[str]
-    confidences: dict[str, float]
+    instruments: list[InstrumentPrediction]
     status: Literal["ok", "failed"]
 
 
-class Segment(BaseModel):
+class InstrumentSegment(BaseModel):
     start: float
     end: float
     average_confidence: float
@@ -33,11 +32,11 @@ class Segment(BaseModel):
 class AnalysisResult(BaseModel):
     duration: float
     timeline: list[TimelineEntry]
-    windows: list[Window]
-    instruments: dict[str, list[Segment]]
+    windows: list[InstrumentWindow]
+    instrument_tracks: dict[str, list[InstrumentSegment]]
     model: str
     provider: str
-    chunk_duration: float
+    chunk_duration: float | None
     threshold: float
     failed_chunks: int
     warnings: list[str]
